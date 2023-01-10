@@ -10,6 +10,18 @@ Marc Jaskir
 # Faculty Lead
 Aaron Alexander-Bloch
 
-# Installation
-This code requires the installation of neuromaps: https://netneurolab.github.io/neuromaps/
-Absolute file paths need to be edited according to your file system
+# Dependencies
+Install Connectome Workbench (https://www.humanconnectome.org/software/get-connectome-workbench)
+Install Miniconda (https://docs.conda.io/en/latest/miniconda.html), creating and activating an environment called "neuromaps"
+Install pip
+- conda install pip
+Install neuromaps
+- git clone https://github.com/netneurolab/neuromaps
+- cd neuromaps
+- pip install .
+Add neuromaps installation to Python path
+- export PYTHONPATH="${PYTHONPATH}:/path/to/neuromaps"
+
+# Usage
+Start by running 1_gen_adjacency_matrix.sh, which calls the associated Python script.
+Then, R Markdown files can be executed in sequence. Rendered .html files are included for reference.
