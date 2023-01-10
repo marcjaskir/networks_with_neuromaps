@@ -15,7 +15,7 @@ Install Connectome Workbench (https://www.humanconnectome.org/software/get-conne
 Install Miniconda (https://docs.conda.io/en/latest/miniconda.html), creating and activating an environment called "neuromaps"
 Install pip
 - conda install pip
-Install neuromaps
+Install neuromaps (Complete instructions here: https://netneurolab.github.io/neuromaps/)
 - git clone https://github.com/netneurolab/neuromaps
 - cd neuromaps
 - pip install .
