@@ -202,3 +202,7 @@ plot(x=louvain_observed_ari_loess_fit$num_communities, y=louvain_observed_ari_lo
 plot(x=louvain_diff_ari_loess_fit$num_communities, y=louvain_diff_ari_loess_fit$ari_diff, col="blue", type='l', xlab='Number of communities', ylab='Difference', main='Observed - Null', cex.lab=1.25, cex.main=1.25)
 ```
 
+# Session info
+```{r}
+sessionInfo()
+```

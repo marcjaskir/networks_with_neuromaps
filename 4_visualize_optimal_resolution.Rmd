@@ -139,4 +139,7 @@ visNetwork(nodes, edges, width = "100%") %>%
   visLayout(randomSeed = 1234)
 ```
 
-
+# Session info
+```{r}
+sessionInfo()
+```
