@@ -1,0 +1,204 @@
+---
+title: "Evaluate Louvain performance"
+author: "Marc Jaskir"
+date: "1/9/2023"
+output: 
+  html_document: 
+    toc: yes
+---
+
+# Load packages/data
+```{r}
+rm(list=ls())
+
+library(ggcorrplot)
+library(ggplot2)
+library(igraph)
+library(visNetwork)
+library(DescTools)
+library(mgcv)
+library(gam)
+
+louvain_observed <- read.csv('/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/2/observed/louvain_performance.csv')
+louvain_null <- read.csv('/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/2/null/louvain_performance.csv')
+```
+
+# Visualize Louvain performance by resolution
+
+## Fit models predicting NMI, ARI, and #Communities by Resolution
+```{r}
+### NMI ###
+
+# Observed
+louvain_observed_nmi_loess <- loess(nmi ~ res, data=louvain_observed, span=0.05)
+louvain_observed_nmi_loess_fit <- data.frame(res=sort(louvain_observed$res), nmi=sort(louvain_observed$nmi), nmi_predicted=sort(predict(louvain_observed_nmi_loess)))
+
+# Null
+louvain_null_nmi_loess <- loess(nmi ~ res, data=louvain_null, span=0.05)
+louvain_null_nmi_loess_fit <- data.frame(res=sort(louvain_null$res), nmi=sort(louvain_null$nmi), nmi_predicted=sort(predict(louvain_null_nmi_loess)))
+
+# Difference in fits
+fit_differences <- c()
+for (resolutions in unique(louvain_observed_nmi_loess_fit$res)) {
+  fit_observed_mean <- mean(louvain_observed_nmi_loess_fit[louvain_observed_nmi_loess_fit$res == resolutions,'nmi_predicted'], na.rm=TRUE)
+  fit_null_mean <- mean(louvain_null_nmi_loess_fit[louvain_null_nmi_loess_fit$res == resolutions,'nmi_predicted'], na.rm = TRUE)
+  fit_differences <- c(fit_differences, fit_observed_mean - fit_null_mean)
+}
+louvain_diff_nmi_loess_fit <- data.frame(res=unique(louvain_observed_nmi_loess_fit$res), nmi_diff=fit_differences)
+
+### ARI ###
+
+# Observed
+louvain_observed_ari_loess <- loess(ari ~ res, data=louvain_observed, span=0.05)
+louvain_observed_ari_loess_fit <- data.frame(res=sort(louvain_observed$res), ari=sort(louvain_observed$ari), ari_predicted=sort(predict(louvain_observed_ari_loess)))
+
+# Null
+louvain_null_ari_loess <- loess(ari ~ res, data=louvain_null, span=0.05)
+louvain_null_ari_loess_fit <- data.frame(res=sort(louvain_null$res), ari=sort(louvain_null$ari), ari_predicted=sort(predict(louvain_null_ari_loess)))
+
+# Difference in fits
+fit_differences <- c()
+for (resolutions in unique(louvain_observed_ari_loess_fit$res)) {
+  fit_observed_mean <- mean(louvain_observed_ari_loess_fit[louvain_observed_ari_loess_fit$res == resolutions,'ari_predicted'], na.rm=TRUE)
+  fit_null_mean <- mean(louvain_null_ari_loess_fit[louvain_null_ari_loess_fit$res == resolutions,'ari_predicted'], na.rm = TRUE)
+  fit_differences <- c(fit_differences, fit_observed_mean - fit_null_mean)
+}
+louvain_diff_ari_loess_fit <- data.frame(res=unique(louvain_observed_ari_loess_fit$res), ari_diff=fit_differences)
+
+### Number of communities ###
+
+# Observed
+louvain_observed_num_communities_loess <- loess(num_communities ~ res, data=louvain_observed, span=0.05)
+louvain_observed_num_communities_loess_fit <- data.frame(res=sort(louvain_observed$res), num_communities=sort(louvain_observed$num_communities), num_communities_predicted=sort(predict(louvain_observed_num_communities_loess)))
+
+# Null
+louvain_null_num_communities_loess <- loess(num_communities ~ res, data=louvain_null, span=0.05)
+louvain_null_num_communities_loess_fit <- data.frame(res=sort(louvain_null$res), num_communities=sort(louvain_null$num_communities), num_communities_predicted=sort(predict(louvain_null_num_communities_loess)))
+
+# Difference in fits
+fit_differences <- c()
+for (resolutions in unique(louvain_observed_num_communities_loess_fit$res)) {
+  fit_observed_mean <- mean(louvain_observed_num_communities_loess_fit[louvain_observed_num_communities_loess_fit$res == resolutions,'num_communities_predicted'], na.rm=TRUE)
+  fit_null_mean <- mean(louvain_null_num_communities_loess_fit[louvain_null_num_communities_loess_fit$res == resolutions,'num_communities_predicted'], na.rm = TRUE)
+  fit_differences <- c(fit_differences, fit_observed_mean - fit_null_mean)
+}
+louvain_diff_num_communities_loess_fit <- data.frame(res=unique(louvain_observed_num_communities_loess_fit$res), num_communities_diff=fit_differences)
+
+```
+
+## Plot NMI by Resolution
+```{r}
+par(mfrow = c(2,2))
+
+plot(x=louvain_observed$res, y=louvain_observed$nmi, cex=0.05, ylim=c(0,0.75), col='grey', xlab=expression(gamma), ylab='NMI', main='Observed', cex.lab=1.25, cex.main=1.25) +
+  lines(x=louvain_observed_nmi_loess_fit$res, y=louvain_observed_nmi_loess_fit$nmi_predicted, col="red")
+plot(x=louvain_null$res, y=louvain_null$nmi, cex=0.05, ylim=c(0,0.75), col='grey', xlab=expression(gamma), ylab='NMI', main='Null', cex.lab=1.25, cex.main=1.25)
+  lines(x=louvain_null_nmi_loess_fit$res, y=louvain_null_nmi_loess_fit$nmi_predicted)
+plot(x=louvain_observed_nmi_loess_fit$res, y=louvain_observed_nmi_loess_fit$nmi_predicted, ylim=c(0,0.75), col="red", type='l', xlab=expression(gamma), ylab='NMI', main='Overlay', cex.lab=1.25, cex.main=1.25) +
+  lines(x=louvain_null_nmi_loess_fit$res, y=louvain_null_nmi_loess_fit$nmi_predicted)
+plot(x=louvain_diff_nmi_loess_fit$res, y=louvain_diff_nmi_loess_fit$nmi_diff, col="blue", type='l', xlab=expression(gamma), ylab='Difference', main='Observed - Null', cex.lab=1.25, cex.main=1.25)
+```
+
+## Plot ARI by Resolution
+```{r}
+par(mfrow = c(2,2))
+
+plot(x=louvain_observed$res, y=louvain_observed$ari, cex=0.05, col='grey', ylim=c(0,0.6), xlab=expression(gamma), ylab='ARI', main='Observed', cex.lab=1.25, cex.main=1.25) +
+  lines(x=louvain_observed_ari_loess_fit$res, y=louvain_observed_ari_loess_fit$ari_predicted, col="red")
+plot(x=louvain_null$res, y=louvain_null$ari, cex=0.05, col='grey', ylim=c(0,0.6), xlab=expression(gamma), ylab='ARI', main='Null', cex.lab=1.25, cex.main=1.25)
+  lines(x=louvain_null_ari_loess_fit$res, y=louvain_null_ari_loess_fit$ari_predicted)
+plot(x=louvain_observed_ari_loess_fit$res, y=louvain_observed_ari_loess_fit$ari_predicted, col="red", type='l', ylim=c(0,0.6), xlab=expression(gamma), ylab='ARI', main='Overlay', cex.lab=1.25, cex.main=1.25) +
+  lines(x=louvain_null_ari_loess_fit$res, y=louvain_null_ari_loess_fit$ari_predicted)
+plot(x=louvain_diff_ari_loess_fit$res, y=louvain_diff_ari_loess_fit$ari_diff, col="blue", type='l', xlab=expression(gamma), ylab='Difference', main='Observed - Null', cex.lab=1.25, cex.main=1.25)
+```
+
+## Plot #Communities by Resolution
+```{r}
+par(mfrow = c(2,2))
+
+plot(x=louvain_observed$res, y=louvain_observed$num_communities, cex=0.05, col='grey', xlab=expression(gamma), ylab='Number of communities', main='Observed') +
+  lines(x=louvain_observed_num_communities_loess_fit$res, y=louvain_observed_num_communities_loess_fit$num_communities_predicted, col="red")
+plot(x=louvain_null$res, y=louvain_null$num_communities, cex=0.05, col='grey', xlab=expression(gamma), ylab='Number of communities', main='Null')
+  lines(x=louvain_null_num_communities_loess_fit$res, y=louvain_null_num_communities_loess_fit$num_communities_predicted)
+plot(x=louvain_observed_num_communities_loess_fit$res, y=louvain_observed_num_communities_loess_fit$num_communities_predicted, col="red", type='l', xlab=expression(gamma), ylab='Number of communities', main='Overlay') +
+  lines(x=louvain_null_num_communities_loess_fit$res, y=louvain_null_num_communities_loess_fit$num_communities_predicted)
+plot(x=louvain_diff_num_communities_loess_fit$res, y=louvain_diff_num_communities_loess_fit$num_communities_diff, col="blue", type='l', xlab=expression(gamma), ylab='Difference', main='Observed - Null', cex.lab=1.25, cex.main=1.25)
+```
+## Determine optimal resolution as maximal difference between observed and null NMI
+```{r}
+louvain_diff_nmi_loess_fit_optimal <- louvain_diff_nmi_loess_fit[louvain_diff_nmi_loess_fit$nmi_diff == max(louvain_diff_nmi_loess_fit$nmi_diff, na.rm=TRUE),]
+louvain_diff_nmi_loess_fit_optimal <- louvain_diff_nmi_loess_fit_optimal[! is.na(louvain_diff_nmi_loess_fit_optimal$nmi_diff),]
+print(louvain_diff_nmi_loess_fit_optimal)
+```
+Optimal Louvain resolution: 0.83
+
+# Visualize Louvain performance by #Communities
+
+## Fit models predicting NMI and ARI by #Communities
+```{r}
+### NMI ###
+
+# Observed
+louvain_observed_nmi_loess <- loess(nmi ~ num_communities, data=louvain_observed, span=0.2, control=loess.control(surface="direct"))
+louvain_observed_nmi_loess_fit <- data.frame(num_communities=sort(louvain_observed$num_communities), nmi=sort(louvain_observed$nmi), nmi_predicted=sort(predict(louvain_observed_nmi_loess)))
+
+# Null
+louvain_null_nmi_loess <- loess(nmi ~ num_communities, data=louvain_null, span=0.2, control=loess.control(surface="direct"))
+louvain_null_nmi_loess_fit <- data.frame(num_communities=sort(louvain_null$num_communities), nmi=sort(louvain_null$nmi), nmi_predicted=sort(predict(louvain_null_nmi_loess)))
+
+# Difference in fits
+fit_differences <- c()
+for (num in unique(louvain_observed_nmi_loess_fit$num_communities)) {
+  fit_observed_mean <- mean(louvain_observed_nmi_loess_fit[louvain_observed_nmi_loess_fit$num_communities == num,'nmi_predicted'], na.rm=TRUE)
+  fit_null_mean <- mean(louvain_null_nmi_loess_fit[louvain_null_nmi_loess_fit$num_communities == num,'nmi_predicted'], na.rm = TRUE)
+  fit_differences <- c(fit_differences, fit_observed_mean - fit_null_mean)
+}
+louvain_diff_nmi_loess_fit <- data.frame(num_communities=unique(louvain_observed_nmi_loess_fit$num_communities), nmi_diff=fit_differences)
+
+### ARI ###
+
+# Observed
+louvain_observed_ari_loess <- loess(ari ~ num_communities, data=louvain_observed, span=0.2, control=loess.control(surface="direct"))
+louvain_observed_ari_loess_fit <- data.frame(num_communities=sort(louvain_observed$num_communities), ari=sort(louvain_observed$ari), ari_predicted=sort(predict(louvain_observed_ari_loess)))
+
+# Null
+louvain_null_ari_loess <- loess(ari ~ num_communities, data=louvain_null, span=0.2, control=loess.control(surface="direct"))
+louvain_null_ari_loess_fit <- data.frame(num_communities=sort(louvain_null$num_communities), ari=sort(louvain_null$ari), ari_predicted=sort(predict(louvain_null_ari_loess)))
+
+# Difference in fits
+fit_differences <- c()
+for (num_communitiesolutions in unique(louvain_observed_ari_loess_fit$num_communities)) {
+  fit_observed_mean <- mean(louvain_observed_ari_loess_fit[louvain_observed_ari_loess_fit$num_communities == num_communitiesolutions,'ari_predicted'], na.rm=TRUE)
+  fit_null_mean <- mean(louvain_null_ari_loess_fit[louvain_null_ari_loess_fit$num_communities == num_communitiesolutions,'ari_predicted'], na.rm = TRUE)
+  fit_differences <- c(fit_differences, fit_observed_mean - fit_null_mean)
+}
+louvain_diff_ari_loess_fit <- data.frame(num_communities=unique(louvain_observed_ari_loess_fit$num_communities), ari_diff=fit_differences)
+
+```
+
+## Plot NMI by #Communities
+```{r}
+par(mfrow = c(2,2))
+
+plot(x=louvain_observed$num_communities, y=louvain_observed$nmi, cex=0.05, ylim=c(0,0.75), col='grey', xlab='Number of communities', ylab='NMI', main='Observed', cex.lab=1.25, cex.main=1.25) +
+  lines(x=louvain_observed_nmi_loess_fit$num_communities, y=louvain_observed_nmi_loess_fit$nmi_predicted, col="red")
+plot(x=louvain_null$num_communities, y=louvain_null$nmi, cex=0.05, ylim=c(0,0.75), col='grey', xlab='Number of communities', ylab='NMI', main='Null', cex.lab=1.25, cex.main=1.25)
+  lines(x=louvain_null_nmi_loess_fit$num_communities, y=louvain_null_nmi_loess_fit$nmi_predicted)
+plot(x=louvain_observed_nmi_loess_fit$num_communities, y=louvain_observed_nmi_loess_fit$nmi_predicted, col="red", ylim=c(0,0.75), type='l', xlab='Number of communities', ylab='NMI', main='Overlay', cex.lab=1.25, cex.main=1.25) +
+  lines(x=louvain_null_nmi_loess_fit$num_communities, y=louvain_null_nmi_loess_fit$nmi_predicted)
+plot(x=louvain_diff_nmi_loess_fit$num_communities, y=louvain_diff_nmi_loess_fit$nmi_diff, xlim=c(0,50),col="blue", type='l', xlab='Number of communities', ylab='Difference', main='Observed - Null', cex.lab=1.25, cex.main=1.25)
+```
+
+## Plot ARI by #Communities
+```{r}
+par(mfrow = c(2,2))
+
+plot(x=louvain_observed$num_communities, y=louvain_observed$ari, cex=0.05, col='grey', xlab='Number of communities', ylab='ARI', main='Observed', cex.lab=1.25, cex.main=1.25) +
+  lines(x=louvain_observed_ari_loess_fit$num_communities, y=louvain_observed_ari_loess_fit$ari_predicted, col="red")
+plot(x=louvain_null$num_communities, y=louvain_null$ari, cex=0.05, col='grey', xlab='Number of communities', ylab='ARI', main='Null', cex.lab=1.25, cex.main=1.25)
+  lines(x=louvain_null_ari_loess_fit$num_communities, y=louvain_null_ari_loess_fit$ari_predicted)
+plot(x=louvain_observed_ari_loess_fit$num_communities, y=louvain_observed_ari_loess_fit$ari_predicted, col="red", type='l', xlab='Number of communities', ylab='ARI', main='Overlay', cex.lab=1.25, cex.main=1.25, ylim=c(0.05,0.5)) +
+  lines(x=louvain_null_ari_loess_fit$num_communities, y=louvain_null_ari_loess_fit$ari_predicted)
+plot(x=louvain_diff_ari_loess_fit$num_communities, y=louvain_diff_ari_loess_fit$ari_diff, col="blue", type='l', xlab='Number of communities', ylab='Difference', main='Observed - Null', cex.lab=1.25, cex.main=1.25)
+```
+

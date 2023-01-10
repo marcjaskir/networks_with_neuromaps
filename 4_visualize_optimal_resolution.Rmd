@@ -1,0 +1,142 @@
+---
+title: "Visualize optimal Louvain resolution"
+author: "Marc Jaskir"
+date: "1/9/2023"
+output: 
+  html_document: 
+    toc: yes
+---
+
+# Load packages/data
+```{r}
+rm(list=ls())
+
+library(igraph)
+library(visNetwork)
+
+adj_mat <- read.csv('/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/2/observed/fsLR_32k_adjacency_matrix_modZ_norm.csv', header = FALSE)
+adj_mat_labs <- read.table('/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/1/fsLR_32k_annotation_labels.csv',sep=',')
+```
+
+# Basic preprocessing
+```{r}
+colnames(adj_mat_labs) <- 'label'
+rownames(adj_mat) <- adj_mat_labs$label
+colnames(adj_mat) <- adj_mat_labs$label
+
+# Instantiate graph data frame
+edges <- as.data.frame(matrix(NA,nrow=choose(nrow(adj_mat),2),ncol=3))
+colnames(edges) <- c('from','to','weight')
+
+# Populate edges data frame
+annotation_pair <- 1
+for (row in 1:(nrow(adj_mat)-1)) {
+  for (col in (row+1):(ncol(adj_mat))) {
+    edges[annotation_pair,] <- c(rownames(adj_mat)[row],colnames(adj_mat)[col],abs(adj_mat)[row,col])
+    annotation_pair <- annotation_pair + 1 
+  }
+}
+
+# Create igraph object from data frame
+g <- graph_from_data_frame(edges, directed = FALSE)
+```
+
+# Run Louvain at optimal resolution
+```{r}
+# Cluster
+lc <- cluster_louvain(g, resolution=0.83)
+
+# Create dataframe for nodes, including community assignments
+nodes <- data.frame(id=adj_mat_labs$label)
+community <- c()
+for (node in 1:length(adj_mat_labs$label)) {
+  community <- c(community, lc$membership[node])
+}
+nodes$community <- community
+
+# Save community assignment
+write.table(nodes, '/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/4/fsLR_32k_adjacency_matrix_norm_community_assignment.csv',sep=',',row.names = FALSE, col.names=FALSE, quote=FALSE)
+
+# Create a duplicate columns with names recognizable by visNetwork
+nodes$group <- sprintf("%i", nodes$community)
+edges$value <- edges$weight
+```
+
+# Visualize optimal network partition
+```{r}
+visNetwork(nodes, edges, width = "100%") %>%
+  visIgraphLayout() %>%
+  visNodes(
+    shape = "dot",
+    size=30,
+    label=nodes$id,
+    font = '12px bold',
+    color = list(
+      background = "#0085AF",
+      border = "#013848",
+      highlight = "#C62F4B"
+    )) %>%
+  visGroups(groupname='1',color='red') %>% visGroups(groupname='2',color='green') %>% visGroups(groupname='3',color='blue') %>% 
+  visEdges(
+    shadow = FALSE,
+    color = list(color = "grey", highlight = "grey")
+    #color = list(color = "#0085AF", highlight = "#C62F4B")
+  ) %>%
+  visOptions(highlightNearest = list(enabled = T, degree = 1, hover = T), selectedBy = "community") %>%
+  visLayout(randomSeed = 1234)
+```
+
+# Plot colorless version of complete network (for presentation)
+```{r}
+nodes$community <- NULL
+nodes$group <- NULL
+visNetwork(nodes, edges, width = "100%") %>%
+  visIgraphLayout() %>%
+  visNodes(
+    color = list(
+      background = "black",
+      border = "black",
+      highlight = "black"
+    )) %>%
+  visEdges(
+    shadow = FALSE,
+    color = list(color = "grey", highlight = "#C62F4B")
+  )
+```
+
+# Plot a range of community resolutions (for presentation)
+Simply change resolution parameter to replicate
+```{r}
+# Cluster
+lc <- cluster_louvain(g, resolution=1.5)
+
+# Create dataframe for nodes, including community assignments
+nodes <- data.frame(id=adj_mat_labs$label)
+community <- c()
+for (node in 1:length(adj_mat_labs$label)) {
+  community <- c(community, lc$membership[node])
+}
+nodes$community <- community
+
+# Create a duplicate columns with names recognizable by visNetwork
+nodes$group <- nodes$community
+edges$value <- edges$weight
+
+visNetwork(nodes, edges, width = "100%") %>%
+  visIgraphLayout() %>%
+  visNodes(
+    shape = "dot",
+    size=30,
+    label=nodes$id,
+    font = '12px bold',
+    ) %>%
+  visGroups(groupname='1',color='red') %>% visGroups(groupname='2',color='yellow') %>% visGroups(groupname='3',color='green') %>% 
+  visEdges(
+    shadow = FALSE,
+    color = list(color = "grey", highlight = "#C62F4B")
+  ) %>%
+  visOptions(highlightNearest = list(enabled = T, degree = 1, hover = T), selectedBy = "community") %>%
+  visLayout(randomSeed = 1234)
+```
+
+

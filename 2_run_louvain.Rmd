@@ -1,0 +1,468 @@
+---
+title: "Run Louvain on network of reference maps"
+author: "Marc Jaskir"
+date: "1/9/2023"
+output: 
+  html_document: 
+    toc: yes
+---
+
+# Load packages/data
+```{r}
+rm(list=ls())
+
+library(ggcorrplot)
+library(ggplot2)
+library(igraph)
+
+# Create output directory
+dir.create("/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/2", showWarnings = FALSE)
+
+setwd('/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/1')
+
+# Read in data
+annotation_labels <- read.table('fsLR_32k_annotation_labels.csv',sep=',')
+adj_mat <- read.table('fsLR_32k_adjacency_matrix.csv',sep=',')
+pval_mat <- read.table('fsLR_32k_pval_matrix.csv',sep=',')
+null_distributions <- read.table('fsLR_32k_null_distributions.csv',sep=',')
+```
+
+# Basic preprocessing
+```{r}
+# Add variable name to label data frame
+colnames(annotation_labels) <- 'label'
+
+# Add variable names to null distributions data frame
+colnames(null_distributions)[1:2] <- c('map1','map2')
+
+# Add labels to adjacency matrix
+colnames(adj_mat) <- annotation_labels$label
+rownames(adj_mat) <- annotation_labels$label
+
+# Convert NaNs
+adj_mat[adj_mat == 'NaN'] <- NA
+```
+
+# Normalize correlations using a modified z-transformation (x-median/MAD) based on pairwise null distributions
+```{r}
+# Normalize correlations based on null distributions
+adj_mat_modz <- matrix(NA,nrow=nrow(adj_mat),ncol=ncol(adj_mat))
+normality <- c()
+for (i in 1:(nrow(adj_mat)-1)) {
+  for (j in (i+1):ncol(adj_mat)) {
+
+    # Extract null distribution
+    null_distribution <- abs(unlist(null_distributions[with(null_distributions, null_distributions$map1 == i & null_distributions$map2 == j),3:ncol(null_distributions)]))
+    
+    # Perform modified z-transformation 
+    adj_mat_modz[i,j] <- (adj_mat[i,j]-median(null_distribution))/mad(null_distribution)  
+
+  }
+}
+
+# Save modified z-transformed adjacency matrix
+dir.create('/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/2/observed',recursive=TRUE,showWarnings = FALSE)
+write.table(adj_mat_modz, '/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/2/observed/fsLR_32k_adjacency_matrix_modZ_norm.csv', sep=',', row.names = FALSE, col.names = FALSE)
+
+
+# Add labels to normalized adjacency matrix
+colnames(adj_mat_modz) <- annotation_labels$label
+rownames(adj_mat_modz) <- annotation_labels$label
+```
+
+# Create null adjacency matrices by randomly permuting the observed adjacency matrix
+```{r}
+null_mats_permuted <- list()
+seed <- 3456
+adj_mat_data <- na.omit(as.vector(adj_mat_modz))
+for (i in 1:100) {
+  
+  # Set seed
+  set.seed(seed)
+  
+  # Permute
+  adj_mat_data_permuted <- sample(adj_mat_data)
+  
+  # Reassign to upper triangle
+  adj_mat_permuted <- adj_mat
+  adj_mat_permuted[upper.tri(adj_mat_permuted)] <- adj_mat_data_permuted
+  
+  # Save
+  null_mats_permuted[[i]] <- adj_mat_permuted
+  
+  # Update seed
+  seed <- seed + 1
+
+}
+
+test1 <- null_mats_permuted[[1]]
+test2 <- null_mats_permuted[[2]]
+```
+
+# Run Louvain on observed adjacency matrix
+```{r}
+# Instantiate graph data frame
+edges <- as.data.frame(matrix(NA,nrow=choose(nrow(adj_mat_modz),2),ncol=3))
+colnames(edges) <- c('from','to','weight')
+
+# Populate graph data frame
+annotation_pair <- 1
+for (row in 1:(nrow(adj_mat_modz)-1)) {
+  for (col in (row+1):(ncol(adj_mat_modz))) {
+    edges[annotation_pair,] <- c(rownames(adj_mat_modz)[row],colnames(adj_mat_modz)[col],abs(adj_mat_modz)[row,col])
+    annotation_pair <- annotation_pair + 1 
+  }
+}
+
+# Create igraph object from graph data frame
+g <- graph_from_data_frame(edges, directed = FALSE)
+
+# Determine resolution range & step size
+resolutions <- seq(0.5,3,0.01)
+
+# Determine number of Louvain iterations
+num_iters <- 100
+
+# Run Louvain many times at each resolution, changing the seed each time
+seed <- 2345
+lcs <- list()
+lcs_num_communities <- list()
+for (iter in 1:num_iters) {
+  
+  print(paste0('Running Louvain at many resolutions, iteration #', iter))
+  
+  iter_key <- paste0('iter',iter)
+  
+  # Set the seed
+  set.seed(seed)
+  
+  for (res in resolutions) {
+    
+    res_key <- paste0('res',res)
+    
+    # Run Louvain
+    lcs[[iter_key]][[res_key]] <- cluster_louvain(g, resolution=res)
+    
+    # Extract the number of communities determined
+    lcs_num_communities[[iter_key]][[res_key]] <- length(unique(lcs[[iter_key]][[res_key]]$membership))
+    
+  }
+  
+  # Update the seed
+  seed <- seed + 1
+  
+}
+
+# Convert # of communities into a data frame
+for (iter in 1:num_iters) {
+  if (iter != 1) {
+    avg_num_communities <- rbind(avg_num_communities,data.frame(iter=rep(iter,length(resolutions)),res=resolutions,num_communities=unlist(lcs_num_communities[iter])))
+  } else {
+    avg_num_communities <- data.frame(iter=rep(iter,length(resolutions)),res=resolutions,num_communities=unlist(lcs_num_communities[iter]))
+  }
+}
+
+avg_nmi_iter <- list()
+avg_ari_iter <- list()
+for (iter in 1:num_iters) {
+  
+  print(paste0('Computing NMI and ARI between each resolution and all others, iteration #', iter))
+  
+  iter_key <- paste0('iter',iter)
+  
+  # Compute average NMI and ARI per iteration # of Louvain within each resolution
+  avg_nmi_iter_by_res <- list()
+  avg_ari_iter_by_res <- list()
+  for (res in resolutions) {
+    
+    res_key <- paste0('res',res)
+
+    nmi <- c()
+    ari <- c()
+    for (compared_res in resolutions) {
+      
+      if (res != compared_res) {
+        
+        compared_res_key <- paste0('res',compared_res)
+        nmi <- c(nmi,compare(lcs[[iter_key]][[res_key]]$membership,lcs[[iter_key]][[compared_res_key]]$membership,method="nmi"))
+        ari <- c(ari,compare(lcs[[iter_key]][[res_key]]$membership,lcs[[iter_key]][[compared_res_key]]$membership,method="adjusted.rand"))
+        
+      }
+      
+    }
+    
+    avg_nmi_iter_by_res[[res_key]] <- mean(nmi)
+    avg_ari_iter_by_res[[res_key]] <- mean(ari)
+    
+  }
+  
+  avg_nmi_iter[[iter_key]] <- avg_nmi_iter_by_res
+  avg_ari_iter[[iter_key]] <- avg_ari_iter_by_res
+  
+}
+
+# Convert average NMI/ARI into data frames
+for (iter in 1:num_iters) {
+  if (iter != 1) {
+    avg_nmi <- rbind(avg_nmi,data.frame(iter=rep(iter,length(resolutions)),res=resolutions,nmi=unlist(avg_nmi_iter[iter])))
+    avg_ari <- rbind(avg_ari,data.frame(iter=rep(iter,length(resolutions)),res=resolutions,ari=unlist(avg_ari_iter[iter])))
+  } else {
+    avg_nmi <- data.frame(iter=rep(iter,length(resolutions)),res=resolutions,nmi=unlist(avg_nmi_iter[iter]))
+    avg_ari <- data.frame(iter=rep(iter,length(resolutions)),res=resolutions,ari=unlist(avg_ari_iter[iter]))
+  }
+}
+
+# Remove NAs
+avg_ari <- avg_ari[!is.na(avg_ari$ari),]
+
+# Save as .csv files
+write.csv(avg_nmi,'/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/2/observed/avg_nmi.csv',row.names = FALSE)
+write.csv(avg_ari,'/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/2/observed/avg_ari.csv',row.names = FALSE)
+write.csv(avg_num_communities,'/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/2/observed/avg_num_communities.csv',row.names = FALSE)
+```
+
+# Run Louvain on null adjacency matrices
+```{r}
+# Determine resolution range & step size
+resolutions <- seq(0.5,3,0.01)
+
+# Only run Louvain once per null adjacency matrix
+# (Running 100 times per null adjacency matrix did not considerably change null distributions for NMI and ARI by resolution and number of communities)
+num_iters <- 1
+
+# Run Louvain at each resolution for each null adjacency matrix, changing the seed each time
+seed <- 1000
+avg_nmi_null_list <- list()
+avg_ari_null_list <- list()
+avg_num_communities_null_list <- list()
+for (null in 1:100) {
+ 
+  # Set the seed
+  set.seed(seed)
+  
+  print(paste0('Running and evaluating Louvain algorithm for null adjacency matrix #', null))
+  
+  # Instantiate graph data frame
+  edges <- as.data.frame(matrix(NA,nrow=choose(nrow(null_mats_permuted[[null]]),2),ncol=3))
+  colnames(edges) <- c('from','to','weight')
+  
+  # Populate edges data frame
+  annotation_pair <- 1
+  for (row in 1:(nrow(adj_mat_modz)-1)) {
+    for (col in (row+1):(ncol(adj_mat_modz))) {
+      edges[annotation_pair,] <- c(rownames(adj_mat_modz)[row],colnames(adj_mat_modz)[col],abs(null_mats_permuted[[null]])[row,col])
+      annotation_pair <- annotation_pair + 1 
+    }
+  }
+  
+  # Create igraph object from data frame
+  g <- graph_from_data_frame(edges, directed = FALSE)
+  
+  # Run Louvain
+  lcs <- list()
+  lcs_num_communities <- list()
+  for (iter in 1:num_iters) {
+    
+    if (num_iters > 1) {
+      print(paste0('Running Louvain at many resolutions, iteration #', iter))
+    }
+    
+    iter_key <- paste0('iter',iter)
+    
+    for (res in resolutions) {
+      
+      res_key <- paste0('res',res)
+      
+      # Run Louvain
+      lcs[[iter_key]][[res_key]] <- cluster_louvain(g, resolution=res)
+      
+      # Extract the number of communities determined
+      lcs_num_communities[[iter_key]][[res_key]] <- length(unique(lcs[[iter_key]][[res_key]]$membership))
+      
+    }
+    
+  }
+  
+  # Convert # of communities into a data frame
+  for (iter in 1:num_iters) {
+    if (iter != 1) {
+      avg_num_communities_null_list[[null]] <- rbind(avg_num_communities[[null]],data.frame(iter=rep(iter,length(resolutions)),res=resolutions,num_communities=unlist(lcs_num_communities[iter])))
+    } else {
+      avg_num_communities_null_list[[null]] <- data.frame(iter=rep(iter,length(resolutions)),res=resolutions,num_communities=unlist(lcs_num_communities[iter]))
+    }
+  }
+  
+  
+  avg_nmi_iter <- list()
+  avg_ari_iter <- list()
+  for (iter in 1:num_iters) {
+    
+    if (num_iters > 1) {
+      print(paste0('Computing average NMI and ARI between each resolution and all others, iteration #', iter))
+    }
+    
+    iter_key <- paste0('iter',iter)
+    
+    # Compute average NMI and ARI for this iteration # of Louvain within each resolution
+    avg_nmi_iter_by_res <- list()
+    avg_ari_iter_by_res <- list()
+    for (res in resolutions) {
+      
+      res_key <- paste0('res',res)
+  
+      nmi <- c()
+      ari <- c()
+      for (compared_res in resolutions) {
+        
+        if (res != compared_res) {
+          
+          compared_res_key <- paste0('res',compared_res)
+          nmi <- c(nmi,compare(lcs[[iter_key]][[res_key]]$membership,lcs[[iter_key]][[compared_res_key]]$membership,method="nmi"))
+          ari <- c(ari,compare(lcs[[iter_key]][[res_key]]$membership,lcs[[iter_key]][[compared_res_key]]$membership,method="adjusted.rand"))
+          
+        }
+        
+      }
+      
+      avg_nmi_iter_by_res[[res_key]] <- mean(nmi)
+      avg_ari_iter_by_res[[res_key]] <- mean(ari)
+      
+    }
+    
+    avg_nmi_iter[[iter_key]] <- avg_nmi_iter_by_res
+    avg_ari_iter[[iter_key]] <- avg_ari_iter_by_res
+    
+  }
+  
+  # Convert average NMI/ARI into data frames
+  for (iter in 1:num_iters) {
+    if (iter != 1) {
+      avg_nmi_null_list[[null]] <- rbind(avg_nmi,data.frame(iter=rep(iter,length(resolutions)),res=resolutions,nmi=unlist(avg_nmi_iter[iter])))
+      avg_ari_null_list[[null]] <- rbind(avg_ari,data.frame(iter=rep(iter,length(resolutions)),res=resolutions,ari=unlist(avg_ari_iter[iter])))
+    } else {
+      avg_nmi_null_list[[null]] <- data.frame(iter=rep(iter,length(resolutions)),res=resolutions,nmi=unlist(avg_nmi_iter[iter]))
+      avg_ari_null_list[[null]] <- data.frame(iter=rep(iter,length(resolutions)),res=resolutions,ari=unlist(avg_ari_iter[iter]))
+    }
+  }
+  
+  # Remove NAs
+  avg_ari_null_list[[null]] <- avg_ari_null_list[[null]][!is.na(avg_ari_null_list[[null]]$ari),]
+    
+  # Update seed
+  seed <- seed + 1
+  
+}
+
+# Populate data frames for saving
+
+# NMI
+null_iter_vec <- c()
+null_res_vec <- c()
+null_nmi_vec <- c()
+for (null in 1:length(avg_nmi_null_list)) {
+  
+  null_iter_vec <- c(null_iter_vec,avg_nmi_null_list[[null]]$iter)
+  null_res_vec <- c(null_res_vec,avg_nmi_null_list[[null]]$res)
+  null_nmi_vec <- c(null_nmi_vec,unlist(avg_nmi_null_list[[null]]$nmi))
+  
+}
+avg_nmi_null <- data.frame(iter=null_iter_vec,res=null_res_vec,nmi=null_nmi_vec)
+
+# ARI
+null_iter_vec <- c()
+null_res_vec <- c()
+null_ari_vec <- c()
+for (null in 1:length(avg_nmi_null_list)) {
+  
+  null_iter_vec <- c(null_iter_vec,avg_ari_null_list[[null]]$iter)
+  null_res_vec <- c(null_res_vec,avg_ari_null_list[[null]]$res)
+  null_ari_vec <- c(null_ari_vec,unlist(avg_ari_null_list[[null]]$ari))
+  
+}
+avg_ari_null <- data.frame(iter=null_iter_vec,res=null_res_vec,ari=null_ari_vec)
+
+# Number of communities
+null_iter_vec <- c()
+null_res_vec <- c()
+null_num_communities_vec <- c()
+for (null in 1:length(avg_nmi_null_list)) {
+  
+  null_iter_vec <- c(null_iter_vec,avg_num_communities_null_list[[null]]$iter)
+  null_res_vec <- c(null_res_vec,avg_num_communities_null_list[[null]]$res)
+  null_num_communities_vec <- c(null_num_communities_vec,unlist(avg_num_communities_null_list[[null]]$num_communities))
+  
+}
+avg_num_communities_null <- data.frame(iter=null_iter_vec,res=null_res_vec,num_communities=null_num_communities_vec)
+
+# Save as .csv files
+dir.create('/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/2/null',recursive=TRUE,showWarnings = FALSE)
+write.csv(avg_nmi_null,'/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/2/null/avg_nmi_null.csv',row.names = FALSE)
+write.csv(avg_ari_null,'/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/2/null/avg_ari_null.csv',row.names = FALSE)
+write.csv(avg_num_communities_null,'/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/2/null/avg_num_communities_null.csv',row.names = FALSE)
+```
+
+Read in the .csv files for both the observed and null adjacency matrices. Merge them into the same dataframe, called louvain_performance.csv
+```{r}
+setwd('/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/2/observed')
+
+avg_nmi <- read.csv('avg_nmi.csv')
+avg_ari <- read.csv('avg_ari.csv')
+avg_num_communities <- read.csv('avg_num_communities.csv')
+
+setwd('/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/2/null')
+
+avg_nmi_null <- read.csv('avg_nmi_null.csv')
+avg_ari_null <- read.csv('avg_ari_null.csv')
+avg_num_communities_null <- read.csv('avg_num_communities_null.csv')
+
+# Correct the avg null dataframes such that iter increases from 1-100 (for plotting)
+
+# NMI
+iter <- 1
+iter_first_row <- 1
+for (rows in 1:nrow(avg_nmi_null)) {
+  if (avg_nmi_null[rows,'res'] == 3.0) {
+    avg_nmi_null[iter_first_row:rows,'iter'] <- iter
+    iter_first_row <- rows + 1
+    iter <- iter + 1
+  }
+}
+
+# ARI
+iter <- 1
+iter_first_row <- 1
+for (rows in 1:nrow(avg_ari_null)) {
+  if (avg_ari_null[rows,'res'] == 3.0) {
+    avg_ari_null[iter_first_row:rows,'iter'] <- iter
+    iter_first_row <- rows + 1
+    iter <- iter + 1
+  }
+}
+
+# # Communities
+iter <- 1
+iter_first_row <- 1
+for (rows in 1:nrow(avg_num_communities_null)) {
+  if (avg_num_communities_null[rows,'res'] == 3.0) {
+    avg_num_communities_null[iter_first_row:rows,'iter'] <- iter
+    iter_first_row <- rows + 1
+    iter <- iter + 1
+  }
+}
+
+# Merge datasets
+avg <- merge(avg_nmi,avg_ari,by.x=c('iter','res'),by.y=c('iter','res'),all.y=TRUE)
+avg <- merge(avg,avg_num_communities,by.x=c('iter','res'),by.y=c('iter','res'),all.x=TRUE)
+avg_null <- merge(avg_nmi_null,avg_ari_null,by.x=c('iter','res'),by.y=c('iter','res'),all.y=TRUE)
+avg_null <- merge(avg_null,avg_num_communities_null,by.x=c('iter','res'),by.y=c('iter','res'),all.x=TRUE)
+
+# Write datasets
+write.csv(avg,'/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/2/observed/louvain_performance.csv',row.names = FALSE)
+write.csv(avg_null,'/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/2/null/louvain_performance.csv',row.names = FALSE)
+```
+
+# Session info
+```{r}
+sessionInfo()
+```
+

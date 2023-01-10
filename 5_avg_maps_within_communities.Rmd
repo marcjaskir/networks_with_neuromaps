@@ -1,0 +1,325 @@
+---
+title: "Visualize community-level spatial averages"
+author: "Marc Jaskir"
+date: "1/9/2023"
+output: 
+  html_document: 
+    toc: yes
+---
+
+# Load packages/data
+```{r}
+library(cifti)
+library(ciftiTools)
+library(gifti)
+
+rm(list=ls())
+
+# Load community assignments
+community_assignment <- read.table('/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/4/fsLR_32k_adjacency_matrix_modZ_norm_community_assignment.csv',sep=',')
+colnames(community_assignment) <- c('map','community')
+
+# Load reference maps (transformed to fsLR 32k)
+setwd('/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/outputs/1/annotations_fslr')
+map_files <- list.files(pattern="*.gii")
+map_labels <- gsub('.gii','',map_files)
+map_list <- lapply(map_files, function(x){read_gifti(x)})
+names(map_list) <- map_labels
+
+# Load surface files
+setwd('/Users/mjaskir/neuromaps-data/atlases/fsLR')
+fslr_32k_midthickness_lh <- read_gifti('tpl-fsLR_den-32k_hemi-L_midthickness.surf.gii')
+fslr_32k_midthickness_rh <- read_gifti('tpl-fsLR_den-32k_hemi-R_midthickness.surf.gii')
+
+# Load medial wall files
+setwd('/Users/mjaskir/ngg/rotations/alexanderbloch/neuromaps/scripts/medial_wall')
+medial_wall_lh <- read.table('medialwall.mask.leftcortex.csv',sep=',')
+medial_wall_rh <- read.table('medialwall.mask.rightcortex.csv',sep=',')
+```
+
+# Rescale reference maps
+Each map is rescaled to have range 0-1
+NOTE: vertex data were labeled with shape, normal, or estimate
+```{r}
+map_list_rescaled <- list()
+for (label in map_labels) {
+  
+  if (length(map_list[label][[1]]$data$shape) != 0) {
+    
+    vertex_data <- map_list[label][[1]]$data$shape
+    
+    # Make minimum 0, if necessary
+    if (range(vertex_data,na.rm = TRUE)[1] != 0) {
+      vertex_data <- vertex_data - range(vertex_data,na.rm=TRUE)[1]
+    }
+
+    # Rescale to 0-1
+    vertex_data <- vertex_data/range(vertex_data,na.rm=TRUE)[2]
+    
+    # Remove medial wall
+    if (grepl('_lh$',label)) {
+      vertex_data <- vertex_data*medial_wall_lh
+    } else {
+      vertex_data <- vertex_data*medial_wall_rh
+    }
+    
+    # Save to list
+    map_list_rescaled[label] <- map_list[label]
+    map_list_rescaled[label][[1]]$data$shape <- vertex_data
+    
+  } else if (length(map_list[label][[1]]$data$normal) != 0) {
+    
+    vertex_data <- map_list[label][[1]]$data$normal
+
+    # Make minimum 0, if necessary
+    if (range(vertex_data,na.rm = TRUE)[1] != 0) {
+      vertex_data <- vertex_data - range(vertex_data,na.rm=TRUE)[1]
+    }
+
+    # Rescale to 0-1
+    vertex_data <- vertex_data/range(vertex_data,na.rm=TRUE)[2]
+    
+    # Remove medial wall
+    if (grepl('_lh$',label)) {
+      vertex_data <- vertex_data*medial_wall_lh
+    } else {
+      vertex_data <- vertex_data*medial_wall_rh
+    }
+    
+    # Save to list
+    map_list_rescaled[label] <- map_list[label]
+    map_list_rescaled[label][[1]]$data$normal <- vertex_data
+    
+  } else if (length(map_list[label][[1]]$data$estimate) != 0) {
+    
+    vertex_data <- map_list[label][[1]]$data$estimate
+    
+    # Make minimum 0, if necessary
+    if (range(vertex_data,na.rm = TRUE)[1] != 0) {
+      vertex_data <- vertex_data - range(vertex_data,na.rm=TRUE)[1]
+    }
+
+    # Rescale to 0-1
+    vertex_data <- vertex_data/range(vertex_data,na.rm=TRUE)[2]
+    
+    # Remove medial wall
+    if (grepl('_lh$',label)) {
+      vertex_data <- vertex_data*medial_wall_lh
+    } else {
+      vertex_data <- vertex_data*medial_wall_rh
+    }
+    
+    # Save to list
+    map_list_rescaled[label] <- map_list[label]
+    map_list_rescaled[label][[1]]$data$estimate <- vertex_data
+    
+  } else {
+    print('WARNING: Unusual data structure')
+  }
+  
+}
+```
+
+# Parse reference maps by community assignment
+```{r}
+# Divide by community assignment
+community_1 <- list()
+community_2 <- list()
+community_3 <- list()
+for (map in community_assignment$map) {
+  community <- community_assignment[community_assignment$map == map,'community']
+  for (label in grep(map,map_labels)) {
+    if (community == 1) {
+      community_1[map_labels[label]] <- map_list_rescaled[label]
+    } else if (community == 2) {
+      community_2[map_labels[label]] <- map_list_rescaled[label]
+    } else if (community == 3) {
+      community_3[map_labels[label]] <- map_list_rescaled[label]
+    }
+  }
+}
+
+# Divide further by hemisphere
+community_1_lh <- community_1[grep('lh',names(community_1))]
+community_1_rh <- community_1[grep('rh',names(community_1))]
+community_2_lh <- community_2[grep('lh',names(community_2))]
+community_2_rh <- community_2[grep('rh',names(community_2))]
+community_3_lh <- community_3[grep('lh',names(community_3))]
+community_3_rh <- community_3[grep('rh',names(community_3))]
+```
+
+
+# Create community-specific spatial average surfaces
+Average spatial maps are rescaled to have range 0-1
+```{r}
+# Create template surface
+community_avg_template <- map_list[1]
+names(community_avg_template) <- NULL
+
+# Compute average
+n <- length(community_1_lh)
+for (label in names(community_1_lh)) {
+  if (label == names(community_1_lh)[1]) {
+    vertex_data <- as.vector(unlist(community_1_lh[label][[1]]$data))
+  } else {
+    vertex_data <- vertex_data + as.vector(unlist(community_1_lh[label][[1]]$data))
+  }
+}
+vertex_data_avg <- vertex_data/n
+
+# Rescale to 0-1
+vertex_data_avg <- vertex_data_avg - range(vertex_data_avg,na.rm=TRUE)[1]
+vertex_data_avg <- vertex_data_avg/range(vertex_data_avg,na.rm=TRUE)[2]
+
+# Save to template surface
+community_1_lh_avg <- community_avg_template
+community_1_lh_avg[[1]]$data$shape <- vertex_data_avg
+
+# Compute average
+n <- length(community_1_rh)
+for (label in names(community_1_rh)) {
+  if (label == names(community_1_rh)[1]) {
+    vertex_data <- as.vector(unlist(community_1_rh[label][[1]]$data))
+  } else {
+    vertex_data <- vertex_data + as.vector(unlist(community_1_rh[label][[1]]$data))
+  }
+}
+vertex_data_avg <- vertex_data/n
+
+# Rescale to 0-1
+vertex_data_avg <- vertex_data_avg - range(vertex_data_avg,na.rm=TRUE)[1]
+vertex_data_avg <- vertex_data_avg/range(vertex_data_avg,na.rm=TRUE)[2]
+
+# Save to template surface
+community_1_rh_avg <- community_avg_template
+community_1_rh_avg[[1]]$data$shape <- vertex_data_avg
+
+# Compute average
+n <- length(community_2_lh)
+for (label in names(community_2_lh)) {
+  if (label == names(community_2_lh)[1]) {
+    vertex_data <- as.vector(unlist(community_2_lh[label][[1]]$data))
+  } else {
+    vertex_data <- vertex_data + as.vector(unlist(community_2_lh[label][[1]]$data))
+  }
+}
+vertex_data_avg <- vertex_data/n
+
+# Rescale to 0-1
+vertex_data_avg <- vertex_data_avg - range(vertex_data_avg,na.rm=TRUE)[1]
+vertex_data_avg <- vertex_data_avg/range(vertex_data_avg,na.rm=TRUE)[2]
+
+# Save to template surface
+community_2_lh_avg <- community_avg_template
+community_2_lh_avg[[1]]$data$shape <- vertex_data_avg
+
+# Compute average
+n <- length(community_2_rh)
+for (label in names(community_2_rh)) {
+  if (label == names(community_2_rh)[1]) {
+    vertex_data <- as.vector(unlist(community_2_rh[label][[1]]$data))
+  } else {
+    vertex_data <- vertex_data + as.vector(unlist(community_2_rh[label][[1]]$data))
+  }
+}
+vertex_data_avg <- vertex_data/n
+
+# Rescale to 0-1
+vertex_data_avg <- vertex_data_avg - range(vertex_data_avg,na.rm=TRUE)[1]
+vertex_data_avg <- vertex_data_avg/range(vertex_data_avg,na.rm=TRUE)[2]
+
+# Save to template surface
+community_2_rh_avg <- community_avg_template
+community_2_rh_avg[[1]]$data$shape <- vertex_data_avg
+
+# Compute average
+n <- length(community_3_lh)
+for (label in names(community_3_lh)) {
+  if (label == names(community_3_lh)[1]) {
+    vertex_data <- as.vector(unlist(community_3_lh[label][[1]]$data))
+  } else {
+    vertex_data <- vertex_data + as.vector(unlist(community_3_lh[label][[1]]$data))
+  }
+}
+vertex_data_avg <- vertex_data/n
+
+# Rescale to 0-1
+vertex_data_avg <- vertex_data_avg - range(vertex_data_avg,na.rm=TRUE)[1]
+vertex_data_avg <- vertex_data_avg/range(vertex_data_avg,na.rm=TRUE)[2]
+
+# Save to template surface
+community_3_lh_avg <- community_avg_template
+community_3_lh_avg[[1]]$data$shape <- vertex_data_avg
+
+# Compute average
+n <- length(community_3_rh)
+for (label in names(community_3_rh)) {
+  if (label == names(community_3_rh)[1]) {
+    vertex_data <- as.vector(unlist(community_3_rh[label][[1]]$data))
+  } else {
+    vertex_data <- vertex_data + as.vector(unlist(community_3_rh[label][[1]]$data))
+  }
+}
+vertex_data_avg <- vertex_data/n
+
+# Rescale to 0-1
+vertex_data_avg <- vertex_data_avg - range(vertex_data_avg,na.rm=TRUE)[1]
+vertex_data_avg <- vertex_data_avg/range(vertex_data_avg,na.rm=TRUE)[2]
+
+# Save to template surface
+community_3_rh_avg <- community_avg_template
+community_3_rh_avg[[1]]$data$shape <- vertex_data_avg
+```
+
+# Create community-specific spatial maxima surfaces
+```{r}
+community_1_lh_max <- community_avg_template
+community_1_lh_max[[1]]$data$shape <- ifelse(community_1_lh_avg[[1]]$data$shape - community_2_lh_avg[[1]]$data$shape > 0, ifelse(community_1_lh_avg[[1]]$data$shape - community_3_lh_avg[[1]]$data$shape > 0,1,0),0)
+
+community_1_rh_max <- community_avg_template
+community_1_rh_max[[1]]$data$shape <- ifelse(community_1_rh_avg[[1]]$data$shape - community_2_rh_avg[[1]]$data$shape > 0, ifelse(community_1_rh_avg[[1]]$data$shape - community_3_rh_avg[[1]]$data$shape > 0,1,0),0)
+
+community_2_lh_max <- community_avg_template
+community_2_lh_max[[1]]$data$shape <- ifelse(community_2_lh_avg[[1]]$data$shape - community_1_lh_avg[[1]]$data$shape > 0, ifelse(community_2_lh_avg[[1]]$data$shape - community_3_lh_avg[[1]]$data$shape > 0,1,0),0)
+
+community_2_rh_max <- community_avg_template
+community_2_rh_max[[1]]$data$shape <- ifelse(community_2_rh_avg[[1]]$data$shape - community_1_rh_avg[[1]]$data$shape > 0, ifelse(community_2_rh_avg[[1]]$data$shape - community_3_rh_avg[[1]]$data$shape > 0,1,0),0)
+
+community_3_lh_max <- community_avg_template
+community_3_lh_max[[1]]$data$shape <- ifelse(community_3_lh_avg[[1]]$data$shape - community_1_lh_avg[[1]]$data$shape > 0, ifelse(community_3_lh_avg[[1]]$data$shape - community_2_lh_avg[[1]]$data$shape > 0,1,0),0)
+
+community_3_rh_max <- community_avg_template
+community_3_rh_max[[1]]$data$shape <- ifelse(community_3_rh_avg[[1]]$data$shape - community_1_rh_avg[[1]]$data$shape > 0, ifelse(community_3_rh_avg[[1]]$data$shape - community_2_rh_avg[[1]]$data$shape > 0,1,0),0)
+```
+
+# Visualize spatial averages for each community
+```{r}
+community_1.cifti <- as_cifti(cortexL = community_1_lh_avg[[1]]$data$shape, cortexR = community_1_rh_avg[[1]]$data$shape)
+community_1.cifti <- add_surf(community_1.cifti, surfL = fslr_32k_midthickness_lh, surfR = fslr_32k_midthickness_rh)
+community_2.cifti <- as_cifti(cortexL = community_2_lh_avg[[1]]$data$shape, cortexR = community_2_rh_avg[[1]]$data$shape)
+community_2.cifti <- add_surf(community_2.cifti, surfL = fslr_32k_midthickness_lh, surfR = fslr_32k_midthickness_rh)
+community_3.cifti <- as_cifti(cortexL = community_3_lh_avg[[1]]$data$shape, cortexR = community_3_rh_avg[[1]]$data$shape)
+community_3.cifti <- add_surf(community_3.cifti, surfL = fslr_32k_midthickness_lh, surfR = fslr_32k_midthickness_rh)
+
+view_cifti(community_1.cifti, widget=TRUE, zlim=c(0,1))
+view_cifti(community_2.cifti, widget=TRUE, zlim=c(0,1))
+view_cifti(community_3.cifti, widget=TRUE, zlim=c(0,1))
+```
+
+# Visualize spatial maxima for each community
+```{r}
+community_1.cifti <- as_cifti(cortexL = community_1_lh_max[[1]]$data$shape, cortexR = community_1_rh_max[[1]]$data$shape)
+community_1.cifti <- add_surf(community_1.cifti, surfL = fslr_32k_midthickness_lh, surfR = fslr_32k_midthickness_rh)
+community_2.cifti <- as_cifti(cortexL = community_2_lh_max[[1]]$data$shape, cortexR = community_2_rh_max[[1]]$data$shape)
+community_2.cifti <- add_surf(community_2.cifti, surfL = fslr_32k_midthickness_lh, surfR = fslr_32k_midthickness_rh)
+community_3.cifti <- as_cifti(cortexL = community_3_lh_max[[1]]$data$shape, cortexR = community_3_rh_max[[1]]$data$shape)
+community_3.cifti <- add_surf(community_3.cifti, surfL = fslr_32k_midthickness_lh, surfR = fslr_32k_midthickness_rh)
+
+view_cifti(community_1.cifti, widget=TRUE, zlim=c(0,1), colors=c("white","red"))
+view_cifti(community_2.cifti, widget=TRUE, zlim=c(0,1), colors=c("white","forestgreen"))
+view_cifti(community_3.cifti, widget=TRUE, zlim=c(0,1), colors=c("white","blue"))
+```
+
+
+
+
